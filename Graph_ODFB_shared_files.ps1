@@ -7,7 +7,7 @@
 
 
 [CmdletBinding()] #Make sure we can use -Verbose
-Param([switch]$ExpandFolders,[int]$depth)
+Param([switch]$ExpandFolders,[int]$depth=10)
 
 function processChildren {
 
@@ -232,6 +232,11 @@ function Invoke-GraphApiRequest {
 
         if ($errResp.error.code -match "ResourceNotFound|Request_ResourceNotFound") { Write-Verbose "Resource $uri not found, skipping..."; return } #404, continue
         #also handle 429, throttled (Too many requests)
+        elseif ($errResp.StatusCode -eq 429) {
+            $delay = $_.Exception.'Retry-After'
+            Write-Verbose "Encountered 429 (`"TooManyRequests`"). Waiting $delay seconds."
+            Start-Sleep -Seconds $delay
+        }
         elseif ($errResp.error.code -eq "BadRequest") { return } #400, we should terminate... but stupid Graph sometimes returns 400 instead of 404
         elseif ($errResp.error.code -eq "Forbidden") { Write-Verbose "Insufficient permissions to run the Graph API call, aborting..."; throw } #403, terminate
         elseif ($errResp.error.code -eq "InvalidAuthenticationToken") {
@@ -302,6 +307,7 @@ foreach ($user in $GraphUsers) {
 
     #Check whether the user has ODFB drive provisioned
     $uri = "https://graph.microsoft.com/v1.0/users/$($user.id)/drive/root"
+    
     $UserDrive = Invoke-GraphApiRequest -Uri $uri -Verbose:$VerbosePreference -ErrorAction Stop
 
     #If no items in the drive, skip
@@ -318,4 +324,10 @@ $global:varODFBSharedItems = $Output | select OneDriveOwner,Name,ItemType,Shared
 #$Output | select OneDriveOwner,Name,ItemType,Shared,ExternallyShared,Permissions,ItemPath | Export-Csv -Path "$((Get-Date).ToString('yyyy-MM-dd_HH-mm-ss'))_ODFBSharedItems.csv" -NoTypeInformation -Encoding UTF8 -UseCulture
 return $global:varODFBSharedItems
 
-$Output | ? {$_.Shared -eq "Yes"} | select OneDriveOwner,Name,ItemType,ExternallyShared,Permissions,ItemPath | Export-Csv -Path "$((Get-Date).ToString('yyyy-MM-dd_HH-mm-ss'))_ODFBSharedItems.csv" -NoTypeInformation -Encoding UTF8 -UseCulture
+$downloadsPath = (New-Object -ComObject Shell.Application).Namespace('shell:Downloads').Self.Path
+
+$CSVPath = $downloadsPath + "\"+ "$((Get-Date).ToString('yyyy-MM-dd_HH-mm-ss'))_ODFBSharedItems.csv"
+
+$Output | ? {$_.Shared -eq "Yes"} | select OneDriveOwner,Name,ItemType,ExternallyShared,Permissions,ItemPath | Export-Csv -Path $CSVPath -NoTypeInformation -Encoding UTF8 -UseCulture
+
+ii $CSVPath
