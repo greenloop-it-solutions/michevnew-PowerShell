@@ -263,10 +263,10 @@ function Invoke-GraphApiRequest {
 #Main script starts here
 #==========================================================================
 
-#Variables to configure
-$tenantID = "tenant.onmicrosoft.com" #your tenantID or tenant root domain
-$appID = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" #the GUID of your app. For best result, use app with Sites.ReadWrite.All scope granted.
-$client_secret = "verylongsecurestring" #client secret for the app
+$secretsJson = Get-Content -Raw -Path ".\secrets.json" | ConvertFrom-Json # create a secrets.json file in the same folder containing these secrets. Make sure to add this to .gitignore!
+$tenantID = $secretsJson.'Sharepoint-ODFB-tenantID' #your tenantID or tenant root domain
+$appID = $secretsJson.'Sharepoint-ODFB-appID' #the GUID of your app. For best result, use app with Sites.ReadWrite.All scope granted.
+$client_secret = $secretsJson.'Sharepoint-ODFB-client_secret' #client secret for the app
 
 Renew-Token
 
