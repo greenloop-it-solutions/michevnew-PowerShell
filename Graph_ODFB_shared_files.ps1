@@ -27,8 +27,6 @@ function processChildren {
     do {
         $result = Invoke-GraphApiRequest -Uri "$URI" -Verbose:$VerbosePreference
         $URI = $result.'@odata.nextLink'
-        #If we are getting multiple pages, add some delay to avoid throttling
-        Start-Sleep -Milliseconds 500
         $children += $result
     } while ($URI)
     if (!$children) { Write-Verbose "No items found for $($user.userPrincipalName), skipping..."; continue }
@@ -285,8 +283,6 @@ $uri = "https://graph.microsoft.com/v1.0/users/?`$select=displayName,mail,userPr
 do {
     $result = Invoke-GraphApiRequest -Uri $uri -Verbose:$VerbosePreference -ErrorAction Stop
     $uri = $result.'@odata.nextLink'
-    #If we are getting multiple pages, best add some delay to avoid throttling
-    Start-Sleep -Milliseconds 500
     $GraphUsers += $result.Value
 } while ($uri)
 
@@ -301,8 +297,6 @@ foreach ($user in $GraphUsers) {
     Write-Progress -Activity $ActivityMessage -Status $StatusMessage -PercentComplete $PercentComplete
     $count++
 
-    #simple anti-throttling control
-    Start-Sleep -Milliseconds 500
     Write-Verbose "Processing user $($user.userPrincipalName)..."
 
     #Check whether the user has ODFB drive provisioned
