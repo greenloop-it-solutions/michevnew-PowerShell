@@ -1,3 +1,4 @@
 Role_assignments_InventoryV2.ps1
 secrets.json
 launch.json
+*.csv

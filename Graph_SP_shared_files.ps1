@@ -3,16 +3,17 @@
 # Also make sure the AppID used corresponds to an app with sufficient permissions, as follows:
 #    User.Read.All to enumerate all users in the tenant
 #    Sites.ReadWrite.All to return all the item sharing details
+#    Files.Read.All to examine all fles in each drive
 #    (optional) Directory.Read.All to obtain a domain list and check whether an item is shared externally
 
 [CmdletBinding()] #Make sure we can use -Verbose
-Param([switch]$ExpandFolders,[int]$depth=10)
+Param([switch]$ExpandFolders,[int]$depth)
 
 function processChildren {
 
     Param(
     #Graph User object
-    [Parameter(Mandatory=$true)]$User,
+    [Parameter(Mandatory=$true)]$Drive,
     #URI for the drive
     [Parameter(Mandatory=$true)][string]$URI,
     #Use the ExpandFolders switch to specify whether to expand folders and include their items in the output.
@@ -28,7 +29,7 @@ function processChildren {
         $URI = $result.'@odata.nextLink'
         $children += $result
     } while ($URI)
-    if (!$children) { Write-Verbose "No items found for $($user.userPrincipalName), skipping..."; continue }
+    if (!$children) { Write-Verbose "No items found for $($drive.id), skipping..."; continue }
 
     #handle different children types
     $output = @()
@@ -38,17 +39,17 @@ function processChildren {
 
     #Process Folders
     foreach ($folder in $cFolders) {
-        $output += (processFolder -User $User -folder $folder -ExpandFolders:$ExpandFolders -depth $depth -Verbose:$VerbosePreference)
+        $output += (processFolder -Drive $Drive -folder $folder -ExpandFolders:$ExpandFolders -depth $depth -Verbose:$VerbosePreference)
     }
 
     #Process Files
     foreach ($file in $cFiles) {
-        $output += (processFile -User $User -file $file -Verbose:$VerbosePreference)
+        $output += (processFile -Drive $Drive  -file $file -Verbose:$VerbosePreference)
     }
 
     #Process Notebooks
     foreach ($notebook in $cNotebooks) {
-        $output += (processFile -User $User -file $notebook -Verbose:$VerbosePreference)
+        $output += (processFile -Drive $Drive  -file $notebook -Verbose:$VerbosePreference)
     }
 
     return $output
@@ -58,7 +59,7 @@ function processFolder {
 
     Param(
     #Graph User object
-    [Parameter(Mandatory=$true)]$User,
+    [Parameter(Mandatory=$true)]$Drive,
     #Folder object
     [Parameter(Mandatory=$true)]$folder,
     #Use the ExpandFolders switch to specify whether to expand folders and include their items in the output.
@@ -68,14 +69,14 @@ function processFolder {
 
     #prepare the output object
     $fileinfo = New-Object psobject
-    $fileinfo | Add-Member -MemberType NoteProperty -Name "OneDriveOwner" -Value $user.userPrincipalName
+    $fileinfo | Add-Member -MemberType NoteProperty -Name "WebPath" -Value $Drive.webUrl
     $fileinfo | Add-Member -MemberType NoteProperty -Name "Name" -Value $folder.name
     $fileinfo | Add-Member -MemberType NoteProperty -Name "ItemType" -Value "Folder"
     $fileinfo | Add-Member -MemberType NoteProperty -Name "Shared" -Value (&{If($folder.shared) {"Yes"} Else {"No"}})
 
     #if the Shared property is set, fetch permissions
     if ($folder.shared) {
-        $permlist = getPermissions $user.id $folder.id -Verbose:$VerbosePreference
+        $permlist = getPermissions $Drive.id $folder.id -Verbose:$VerbosePreference
 
         #Match user entries against the list of domains in the tenant to populate the ExternallyShared value
         $regexmatches = $permlist | % {if ($_ -match "\(?\w+([-+.']\w+)*@\w+([-.]\w+)*\.\w+([-.]\w+)*\)?") {$Matches[0]}}
@@ -92,8 +93,8 @@ function processFolder {
     #Since this is a folder item, check for any children, depending on the script parameters
     if (($folder.folder.childCount -gt 0) -and $ExpandFolders -and ((3 - $folder.parentReference.path.Split("/").Count + $depth) -gt 0)) {
         Write-Verbose "Folder $($folder.Name) has child items"
-        $uri = "https://graph.microsoft.com/v1.0/users/$($user.id)/drive/items/$($folder.id)"
-        $folderItems = processChildren -User $user -URI $uri -ExpandFolders:$ExpandFolders -depth $depth -Verbose:$VerbosePreference
+        $uri = "https://graph.microsoft.com/v1.0/drives/$($drive.id)/items/$($folder.id)"
+        $folderItems = processChildren -Drive $Drive -URI $uri -ExpandFolders:$ExpandFolders -depth $depth -Verbose:$VerbosePreference
     }
 
     #handle the output
@@ -105,20 +106,20 @@ function processFile {
 
     Param(
     #Graph User object
-    [Parameter(Mandatory=$true)]$User,
+    [Parameter(Mandatory=$true)]$Drive,
     #File object
     [Parameter(Mandatory=$true)]$file)
 
     #prepare the output object
     $fileinfo = New-Object psobject
-    $fileinfo | Add-Member -MemberType NoteProperty -Name "OneDriveOwner" -Value $user.userPrincipalName
+    $fileinfo | Add-Member -MemberType NoteProperty -Name "WebPath" -Value $drive.webUrl
     $fileinfo | Add-Member -MemberType NoteProperty -Name "Name" -Value $file.name
     $fileinfo | Add-Member -MemberType NoteProperty -Name "ItemType" -Value (&{If($file.package.Type -eq "OneNote") {"Notebook"} Else {"File"}})
     $fileinfo | Add-Member -MemberType NoteProperty -Name "Shared" -Value (&{If($file.shared) {"Yes"} Else {"No"}})
 
     #if the Shared property is set, fetch permissions
     if ($file.shared) {
-        $permlist = getPermissions $user.id $file.id -Verbose:$VerbosePreference
+        $permlist = getPermissions $drive.id $file.id -Verbose:$VerbosePreference
 
         #Match user entries against the list of domains in the tenant to populate the ExternallyShared value
         $regexmatches = $permlist | % {if ($_ -match "\(?\w+([-+.']\w+)*@\w+([-.]\w+)*\.\w+([-.]\w+)*\)?") {$Matches[0]}}
@@ -140,12 +141,12 @@ function getPermissions {
 
     Param(
     #Use the UserId parameter to provide an unique identifier for the user object.
-    [Parameter(Mandatory=$true)][ValidateNotNullOrEmpty()][string]$UserId,
+    [Parameter(Mandatory=$true)][ValidateNotNullOrEmpty()][string]$DriveId,
     #Use the ItemId parameter to provide an unique identifier for the item object.
     [Parameter(Mandatory=$true)][ValidateNotNullOrEmpty()][string]$ItemId)
 
     #fetch permissions for the given item
-    $uri = "https://graph.microsoft.com/beta/users/$($UserId)/drive/items/$($ItemId)/permissions"
+    $uri = "https://graph.microsoft.com/beta/drives/$($DriveId)/items/$($ItemId)/permissions"
     $permissions = (Invoke-GraphApiRequest -Uri $uri -Verbose:$VerbosePreference).Value
 
     #build the permissions string
@@ -276,51 +277,58 @@ $domains = (Invoke-GraphApiRequest -uri "https://graph.microsoft.com/v1.0/domain
 #Adjust the input parameters
 if ($ExpandFolders -and ($depth -le 0)) { $depth = 0 }
 
-#Get a list of all users, make sure to handle multiple pages
-$GraphUsers = @()
-$uri = "https://graph.microsoft.com/v1.0/users/?`$select=displayName,mail,userPrincipalName,id,userType&`$top=999&`$filter=userType eq 'Member'"
-do {
-    $result = Invoke-GraphApiRequest -Uri $uri -Verbose:$VerbosePreference -ErrorAction Stop
-    $uri = $result.'@odata.nextLink'
-    $GraphUsers += $result.Value
-} while ($uri)
+$GraphDrives = @()
+
+$uri = "https://graph.microsoft.com/v1.0/sites/getAllSites?top=999"
+
+$result = Invoke-GraphApiRequest -Uri $uri -Verbose:$VerbosePreference -ErrorAction Stop
+
+$sites = $result.value | ? {$_.webUrl -notlike "https://*-my.sharepoint.com/*"}
+#$sites.count
+foreach ($site in $sites) {
+    $drivesUri = "https://graph.microsoft.com/v1.0/sites/$($site.id)/drives"
+
+    $drivesResponse = (Invoke-GraphAPIRequest -Uri $drivesUri -Verbose:$VerbosePreference -ErrorAction Stop).value
+
+    foreach ($drive in $drivesResponse) {
+        $GraphDrives += $drive | ? {$_.name -ne "Preservation Hold Library"}
+    }
+}
 
 #Get the drive for each user and enumerate files
 $Output = @()
 $count = 1; $PercentComplete = 0;
-foreach ($user in $GraphUsers) {
+foreach ($drive in $GraphDrives) {
+
     #Progress message
-    $ActivityMessage = "Retrieving data for user $($user.displayName). Please wait..."
-    $StatusMessage = ("Processing user {0} of {1}: {2}" -f $count, @($GraphUsers).count, $user.userPrincipalName)
-    $PercentComplete = ($count / @($GraphUsers).count * 100)
+    $ActivityMessage = "Retrieving data for drive $($drive.webUrl). Please wait..."
+    $StatusMessage = ("Processing drive {0} of {1}: {2}" -f $count, @($GraphDrives).count, $drive.webUrl)
+    $PercentComplete = ($count / @($GraphDrives).count * 100)
     Write-Progress -Activity $ActivityMessage -Status $StatusMessage -PercentComplete $PercentComplete
     $count++
 
-    Write-Verbose "Processing user $($user.userPrincipalName)..."
-
-    #Check whether the user has ODFB drive provisioned
-    $uri = "https://graph.microsoft.com/v1.0/users/$($user.id)/drive/root"
-    
-    $UserDrive = Invoke-GraphApiRequest -Uri $uri -Verbose:$VerbosePreference -ErrorAction Stop
+    #Check whether the drive is drive provisioned
+    $uri = "https://graph.microsoft.com/v1.0/drives/$($drive.id)/root"
+    $siteDrive = Invoke-GraphApiRequest -Uri $uri -Verbose:$VerbosePreference -ErrorAction Stop
 
     #If no items in the drive, skip
-    if (!$UserDrive -or ($UserDrive.folder.childCount -eq 0)) { Write-Verbose "No items to report on for user $($user.userPrincipalName), skipping..."; continue }
+    if (!$siteDrive -or ($siteDrive.folder.childCount -eq 0)) { Write-Verbose "No items to report on for drive $($drive.webUrl), skipping..."; continue }
 
     #enumerate items in the drive and prepare the output
-    $pOutput = processChildren -User $user -URI $uri -ExpandFolders:$ExpandFolders -depth $depth
+    $pOutput = processChildren -Drive $drive -URI $uri -ExpandFolders:$ExpandFolders -depth $depth
     $Output += $pOutput
 }
 
 #Return the output
 #$Output | select OneDriveOwner,Name,ItemType,Shared,ExternallyShared,Permissions,ItemPath | ? {$_.Shared -eq "Yes"} | Ogv -PassThru
-$global:varODFBSharedItems = $Output | select OneDriveOwner,Name,ItemType,Shared,ExternallyShared,Permissions,ItemPath | ? {$_.Shared -eq "Yes"}
-#$Output | select OneDriveOwner,Name,ItemType,Shared,ExternallyShared,Permissions,ItemPath | Export-Csv -Path "$((Get-Date).ToString('yyyy-MM-dd_HH-mm-ss'))_ODFBSharedItems.csv" -NoTypeInformation -Encoding UTF8 -UseCulture
-return $global:varODFBSharedItems
+$global:varSPSharedItems = $Output | select WebPath,Name,ItemType,Shared,ExternallyShared,Permissions,ItemPath | ? {$_.Shared -eq "Yes"}
+#$Output | select OneDriveOwner,Name,ItemType,Shared,ExternallyShared,Permissions,ItemPath | Export-Csv -Path "$((Get-Date).ToString('yyyy-MM-dd_HH-mm-ss'))_SPSharedItems.csv" -NoTypeInformation -Encoding UTF8 -UseCulture
+return $global:varSPSharedItems
 
 $downloadsPath = (New-Object -ComObject Shell.Application).Namespace('shell:Downloads').Self.Path
 
-$CSVPath = $downloadsPath + "\"+ "$((Get-Date).ToString('yyyy-MM-dd_HH-mm-ss'))_ODFBSharedItems.csv"
+$CSVPath = $downloadsPath + "\"+ "$((Get-Date).ToString('yyyy-MM-dd_HH-mm-ss'))_SPSharedItems.csv"
 
-$Output | ? {$_.Shared -eq "Yes"} | select OneDriveOwner,Name,ItemType,ExternallyShared,Permissions,ItemPath | Export-Csv -Path $CSVPath -NoTypeInformation -Encoding UTF8 -UseCulture
+$Output | ? {$_.Shared -eq "Yes"} | select WebPath,Name,ItemType,ExternallyShared,Permissions,ItemPath | Export-Csv -Path $CSVPath -NoTypeInformation -Encoding UTF8 -UseCulture
 
 ii $CSVPath
