@@ -210,46 +210,50 @@ function Renew-Token {
     }
 }
 
+
 function Invoke-GraphApiRequest {
     param(
-    [Parameter(Mandatory=$true)][ValidateNotNullOrEmpty()][string]$Uri
+    [Parameter(Mandatory=$true)][ValidateNotNullOrEmpty()][string]$Uri,
+    [int]$MaxRetries = 5
     )
 
     if (!$AuthHeader) { Write-Verbose "No access token found, aborting..."; throw }
+    
+    $retryCount = 0
+    $response = $null
+    do {
+        try { $result = Invoke-WebRequest -Headers $AuthHeader -Uri $uri -Verbose:$VerbosePreference -ErrorAction Stop }
+        catch [System.Net.WebException] {
+            if ($_.Exception.Response -eq $null) { throw }
 
-    try { $result = Invoke-WebRequest -Headers $AuthHeader -Uri $uri -Verbose:$VerbosePreference -ErrorAction Stop }
-    catch [System.Net.WebException] {
-        if ($_.Exception.Response -eq $null) { throw }
+            #Get the full error response
+            $streamReader = [System.IO.StreamReader]::new($_.Exception.Response.GetResponseStream())
+            $streamReader.BaseStream.Position = 0
+            $errResp = $streamReader.ReadToEnd() | ConvertFrom-Json
+            $streamReader.Close()
 
-        #Get the full error response
-        $streamReader = [System.IO.StreamReader]::new($_.Exception.Response.GetResponseStream())
-        $streamReader.BaseStream.Position = 0
-        $errResp = $streamReader.ReadToEnd() | ConvertFrom-Json
-        $streamReader.Close()
-
-        if ($errResp.error.code -match "ResourceNotFound|Request_ResourceNotFound") { Write-Verbose "Resource $uri not found, skipping..."; return } #404, continue
-        #also handle 429, throttled (Too many requests)
-        elseif ($errResp.StatusCode -eq 429) {
-            $delay = $_.Exception.'Retry-After'
-            Write-Verbose "Encountered 429 (`"TooManyRequests`"). Waiting $delay seconds."
-            Start-Sleep -Seconds $delay
-        }
-        elseif ($errResp.error.code -eq "BadRequest") { return } #400, we should terminate... but stupid Graph sometimes returns 400 instead of 404
-        elseif ($errResp.error.code -eq "Forbidden") { Write-Verbose "Insufficient permissions to run the Graph API call, aborting..."; throw } #403, terminate
-        elseif ($errResp.error.code -eq "InvalidAuthenticationToken") {
-            if ($errResp.error.message -eq "Access token has expired.") { #renew token, continue
-                Write-Verbose "Access token has expired, trying to renew..."
-                Renew-Token
-
-                if (!$AuthHeader) { Write-Verbose "Failed to renew token, aborting..."; throw }
-                #Token is renewed, retry the query
-                $result = Invoke-GraphApiRequest -Uri $uri -Verbose:$VerbosePreference
+            if ($errResp.error.code -match "ResourceNotFound|Request_ResourceNotFound") { Write-Verbose "Resource $uri not found, skipping..."; return } #404, continue
+            #also handle 429, throttled (Too many requests)
+            elseif ($errResp.StatusCode -eq 429) {
+                $delay = [int]$_.Exception.'Retry-After'
+                Write-Verbose "Encountered 429 (`"TooManyRequests`"). Waiting $delay seconds."
+                Start-Sleep -Seconds $delay
             }
-            else { Write-Verbose "Access token is invalid, exiting the script." ; throw } #terminate
+            elseif ($errResp.error.code -eq "BadRequest") { return } #400, we should terminate... but stupid Graph sometimes returns 400 instead of 404
+            elseif ($errResp.error.code -eq "Forbidden") { Write-Verbose "Insufficient permissions to run the Graph API call, aborting..."; throw } #403, terminate
+            elseif ($errResp.error.code -eq "InvalidAuthenticationToken") {
+                if ($errResp.error.message -eq "Access token has expired.") { #renew token, continue
+                    Write-Verbose "Access token has expired, trying to renew..."
+                    Renew-Token
+
+                    if (!$AuthHeader) { Write-Verbose "Failed to renew token, aborting..."; throw }
+                }
+                else { Write-Verbose "Access token is invalid, exiting the script." ; throw } #terminate
+            }
+            else { $errResp ; throw }
         }
-        else { $errResp ; throw }
-    }
-    catch { $_ ; return }
+        $retryCount++
+    } while ($retryCount -lt $MaxRetries)
 
     if ($result) {
         if ($result.Content) { ($result.Content | ConvertFrom-Json) }
