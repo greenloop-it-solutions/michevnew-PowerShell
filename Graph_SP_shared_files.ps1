@@ -1,4 +1,4 @@
-#Requires -Version 3.0
+#Requires -Version 7.0
 # Make sure to create your secret.json file before running the script.
 # Also make sure the AppID used corresponds to an app with sufficient permissions, as follows:
 #    User.Read.All to enumerate all users in the tenant
@@ -9,6 +9,7 @@
 [CmdletBinding()] #Make sure we can use -Verbose
 Param([switch]$ExpandFolders,[int]$depth)
 
+#$ErrorView = 'DetailedView'
 function processChildren {
 
     Param(
@@ -223,32 +224,33 @@ function Invoke-GraphApiRequest {
     $response = $null
     do {
         try { $result = Invoke-WebRequest -Headers $AuthHeader -Uri $uri -Verbose:$VerbosePreference -ErrorAction Stop }
-        catch [System.Net.WebException] {
-            if ($_.Exception.Response -eq $null) { throw }
+            catch {
+            $errResp = $_.Exception
+            $statusCode = [int]$errResp.Response.StatusCode
+            $errorCode = ($_.ErrorDetails | ConvertFrom-Json).error.code
+            $StatusMessage = $errResp.Response.ReasonPhrase
+            $statusCode
+            $errorCode
+            $StatusMessage
 
-            #Get the full error response
-            $streamReader = [System.IO.StreamReader]::new($_.Exception.Response.GetResponseStream())
-            $streamReader.BaseStream.Position = 0
-            $errResp = $streamReader.ReadToEnd() | ConvertFrom-Json
-            $streamReader.Close()
-
-            if ($errResp.error.code -match "ResourceNotFound|Request_ResourceNotFound") { Write-Verbose "Resource $uri not found, skipping..."; return } #404, continue
+            if ($errorCode -match "ResourceNotFound|Request_ResourceNotFound") { Write-Verbose "Resource $uri not found, skipping..."; return } #404, continue
             #also handle 429, throttled (Too many requests)
-            elseif ($errResp.StatusCode -eq 429) {
-                $delay = [int]$_.Exception.'Retry-After'
-                Write-Verbose "Encountered 429 (`"TooManyRequests`"). Waiting $delay seconds."
+            elseif ($statusCode -eq 429) {
+                $delay = [int]$_.Exception.Response.Headers["Retry-After"] 
+                Write-Warning "Encountered 429 (`"TooManyRequests`"). Waiting $delay seconds."
+                Start-Sleep -Seconds $delay
+            } elseif ($statusCode -eq 503) {
+                $delay = 30
+                Write-Warning "Encountered 503 error. Waiting $delay seconds."
                 Start-Sleep -Seconds $delay
             }
-            elseif ($errResp.error.code -eq "BadRequest") { return } #400, we should terminate... but stupid Graph sometimes returns 400 instead of 404
-            elseif ($errResp.error.code -eq "Forbidden") { Write-Verbose "Insufficient permissions to run the Graph API call, aborting..."; throw } #403, terminate
-            elseif ($errResp.error.code -eq "InvalidAuthenticationToken") {
-                if ($errResp.error.message -eq "Access token has expired.") { #renew token, continue
-                    Write-Verbose "Access token has expired, trying to renew..."
+            elseif ($errorCode -eq "BadRequest") { return } #400, we should terminate... but stupid Graph sometimes returns 400 instead of 404
+            elseif ($errorCode -eq "Forbidden") { Write-Verbose "Insufficient permissions to run the Graph API call, aborting..."; throw } #403, terminate
+            elseif ($errorCode -match "InvalidAuthenticationToken|unauthenticated|activityLimitReached") {
+                    Write-Warning "Trying to renew access token.."
                     Renew-Token
-
                     if (!$AuthHeader) { Write-Verbose "Failed to renew token, aborting..."; throw }
-                }
-                else { Write-Verbose "Access token is invalid, exiting the script." ; throw } #terminate
+                    else { Write-Verbose "Access Token renewed. Continuing..." ; throw }
             }
             else { $errResp ; throw }
         }
@@ -326,7 +328,7 @@ foreach ($drive in $GraphDrives) {
 #$Output | select OneDriveOwner,Name,ItemType,Shared,ExternallyShared,Permissions,ItemPath | ? {$_.Shared -eq "Yes"} | Ogv -PassThru
 $global:varSPSharedItems = $Output | select WebPath,Name,ItemType,Shared,ExternallyShared,Permissions,ItemPath | ? {$_.Shared -eq "Yes"}
 #$Output | select OneDriveOwner,Name,ItemType,Shared,ExternallyShared,Permissions,ItemPath | Export-Csv -Path "$((Get-Date).ToString('yyyy-MM-dd_HH-mm-ss'))_SPSharedItems.csv" -NoTypeInformation -Encoding UTF8 -UseCulture
-return $global:varSPSharedItems
+#return $global:varSPSharedItems
 
 $downloadsPath = (New-Object -ComObject Shell.Application).Namespace('shell:Downloads').Self.Path
 
