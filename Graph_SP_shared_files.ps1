@@ -70,7 +70,7 @@ function processFolder {
 
     #prepare the output object
     $fileinfo = New-Object psobject
-    $fileinfo | Add-Member -MemberType NoteProperty -Name "WebPath" -Value $Drive.webUrl
+    $fileinfo | Add-Member -MemberType NoteProperty -Name "WebPath" -Value $folder.webUrl
     $fileinfo | Add-Member -MemberType NoteProperty -Name "Name" -Value $folder.name
     $fileinfo | Add-Member -MemberType NoteProperty -Name "ItemType" -Value "Folder"
     $fileinfo | Add-Member -MemberType NoteProperty -Name "Shared" -Value (&{If($folder.shared) {"Yes"} Else {"No"}})
